@@ -98,7 +98,7 @@ class HFActionPredictor:
         from transformers import AutoProcessor, AutoModelForImageTextToText
 
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
-        self.dtype = torch.bfloat16
+        self.dtype = torch.float16
         self.max_new_tokens = max_new_tokens
 
         self.processor = AutoProcessor.from_pretrained(checkpoint, trust_remote_code=True, padding_side="left")
@@ -162,16 +162,31 @@ class NativeActionPredictor:
         cfg_path = resource_path(checkpoint, "config.yaml")
         model_cfg = BaseModelConfig.load(cfg_path, key="model", validate_paths=False)
 
-        with torch.device("meta"):
-            self.model = model_cfg.build_model()
+        # Build in float16 — default is float32 (17.8 GB for 4B params), which
+        # exceeds T4 VRAM (14.56 GB). float16 halves it to ~8.9 GB.
+        # (T4 compute capability 7.5 does not support bfloat16 compute.)
+        prev_dtype = torch.get_default_dtype()
+        torch.set_default_dtype(torch.float16)
+        try:
+            with torch.device("meta"):
+                self.model = model_cfg.build_model()
+        finally:
+            torch.set_default_dtype(prev_dtype)
         self.model.to_empty(device=self.device)
         load_model_state(checkpoint, self.model)
+        self.model = self.model.to(torch.float16)
         self.model.eval()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 
         self.preprocessor = model_cfg.build_preprocessor(for_inference=True, is_training=False)
         log.info(f"Loaded native model from {checkpoint} on {self.device}")
+
+        # Token usage counters (accumulated across all predict() calls)
+        self.tokens_in_text = 0
+        self.tokens_in_image = 0
+        self.tokens_out = 0
+        self._call_count = 0
 
     def predict(
         self,
@@ -191,6 +206,12 @@ class NativeActionPredictor:
         batch["input_ids"] = batch.pop("input_tokens")
         batch.pop("metadata")
         batch = {k: torch.as_tensor(np.expand_dims(v, 0), device=self.device) for k, v in batch.items()}
+        batch = {k: v.to(torch.float16) if torch.is_floating_point(v) else v for k, v in batch.items()}
+
+        # Count input tokens: token_pooling rows = image patch tokens (authoritative);
+        # remainder of input_ids sequence = language tokens.
+        n_in_image = int(batch["token_pooling"].shape[1])
+        n_in_text = int(batch["input_ids"].shape[1]) - n_in_image
 
         sampler = TopPSampler(p=self.top_p, temperature=self.temperature, with_replacement=False)
 
@@ -198,10 +219,28 @@ class NativeActionPredictor:
             print(f"[SAMPLING] TopPSampler(p={self.top_p}, temperature={self.temperature})")
             self._logged_sampler = True
 
-        with torch.inference_mode():
-            output = self.model.generate(batch, max_steps=self.max_new_tokens, sampler=sampler, beam_size=1)
+        prev_dtype = torch.get_default_dtype()
+        torch.set_default_dtype(torch.float16)
+        try:
+            with torch.inference_mode(), torch.autocast(device_type="cuda", dtype=torch.float16):
+                output = self.model.generate(batch, max_steps=self.max_new_tokens, sampler=sampler, beam_size=1)
+        finally:
+            torch.set_default_dtype(prev_dtype)
 
         tokens = output.token_ids[0][0]
         result = self.preprocessor.preprocessor.text_preprocessor.tokenizer.decode(tokens).strip()
+
+        n_out = len(tokens)
+        self._call_count += 1
+        self.tokens_in_text += n_in_text
+        self.tokens_in_image += n_in_image
+        self.tokens_out += n_out
+        print(
+            f"[TOKENS] call={self._call_count}"
+            f"  in_text={n_in_text}  in_image={n_in_image}  out={n_out}"
+            f"  | total_in_text={self.tokens_in_text}"
+            f"  total_in_image={self.tokens_in_image}"
+            f"  total_out={self.tokens_out}"
+        )
 
         return result

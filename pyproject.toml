@@ -25,5 +25,8 @@ dependencies = [
     "backoff>=2.0.0",
 ]
 
+[tool.setuptools]
+packages = ["inference"]
+
 [tool.isort]
 profile = "black"

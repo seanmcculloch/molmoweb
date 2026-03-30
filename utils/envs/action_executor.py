@@ -97,7 +97,7 @@ def execute_action(page, action: ALL_ACTIONS) -> tuple[bool, str]:
             return True, ""
 
         if isinstance(action, Noop):
-            time.sleep(5)
+            time.sleep(2)
             return True, ""
 
         if isinstance(action, (SendMsgToUser, ReportInfeasible)):

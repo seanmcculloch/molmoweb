@@ -357,10 +357,12 @@ class SimpleEnv(BrowserEnv):
         extract_axtree: bool = False,
         headless: bool = True,
         channel: str | None = None,
+        record_video_dir: str | None = None,
     ):
         super().__init__(start_url, goal, viewport_width, viewport_height, extract_axtree)
         self.headless = headless
         self.channel = channel
+        self.record_video_dir = record_video_dir
 
     def _launch(self):
         self.playwright = _start_playwright()
@@ -371,9 +373,11 @@ class SimpleEnv(BrowserEnv):
         if self.channel:
             launch_opts["channel"] = self.channel
         self.browser = self.playwright.chromium.launch(**launch_opts)
-        self.context = self.browser.new_context(
-            viewport={"width": self.viewport_width, "height": self.viewport_height}
-        )
+        ctx_opts: dict = {"viewport": {"width": self.viewport_width, "height": self.viewport_height}}
+        if self.record_video_dir:
+            ctx_opts["record_video_dir"] = self.record_video_dir
+            ctx_opts["record_video_size"] = {"width": self.viewport_width, "height": self.viewport_height}
+        self.context = self.browser.new_context(**ctx_opts)
         self.page = self.context.new_page()
 
     def _get_info(self) -> dict[str, Any]:

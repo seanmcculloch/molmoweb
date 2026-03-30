@@ -72,12 +72,14 @@ class MolmoWeb:
         keep_alive: bool = True,
         headless: bool = True,
         verbose: bool = True,
+        record_video_dir: str | None = None,
     ):
         self.endpoint = endpoint or os.environ.get("MOLMOWEB_ENDPOINT")
         self.local = local
         self.keep_alive = keep_alive
         self.headless = headless
         self.verbose = verbose
+        self.record_video_dir = record_video_dir
         self.agent = self._create_agent() if self.endpoint else None
         self.env = None
         self.last_obs = None
@@ -115,6 +117,7 @@ class MolmoWeb:
                 viewport_height=self.VIEWPORT_HEIGHT,
                 extract_axtree=False,
                 headless=self.headless,
+                record_video_dir=self.record_video_dir,
             )
 
         _check_browserbase_credentials()

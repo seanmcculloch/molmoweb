@@ -75,6 +75,25 @@ class PredictRequest(BaseModel):
     top_p: float | None = None
 
 
+@app.get("/stats")
+def stats():
+    """Return cumulative token usage across all predictors."""
+    totals = {"calls": 0, "tokens_in_text": 0, "tokens_in_image": 0, "tokens_out": 0}
+    predictors = []
+    while not predictor_pool.empty():
+        try:
+            predictors.append(predictor_pool.get_nowait())
+        except Exception:
+            break
+    for p in predictors:
+        totals["calls"] += getattr(p, "_call_count", 0)
+        totals["tokens_in_text"] += getattr(p, "tokens_in_text", 0)
+        totals["tokens_in_image"] += getattr(p, "tokens_in_image", 0)
+        totals["tokens_out"] += getattr(p, "tokens_out", 0)
+        predictor_pool.put(p)
+    return totals
+
+
 @app.post("/predict")
 def predict(request: PredictRequest):
     global predictor_pool
